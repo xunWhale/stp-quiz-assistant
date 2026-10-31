@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stp-quiz-assistant"
+version = "1.0.0"
+description = "ikun 群 STP/RSTP/MSTP 抽查小助手 - 网络工程知识考核、智能判分与错题本管理"
+readme = "README.md"
+authors = [
+    { name = "xunWhale" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+stp-quiz = "stp_quiz.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stp_quiz*"]
+
+[tool.setuptools.package-data]
+stp_quiz = ["*.json"]
