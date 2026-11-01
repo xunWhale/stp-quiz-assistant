@@ -161,6 +161,50 @@ def test_port_states_essay_scoring(question_bank):
     assert len(result.matched_points) == 4
 
 
+def test_calc_bid_pid_scoring(question_bank):
+    q = question_bank.get("CALC-BID-PID-01")
+    assert q is not None
+
+    answer = (
+        "1. 实际数值 BID 优先级为 4106 (4096+10)；"
+        "2. PID 由端口优先级 64 和端口号 5 组合构成；"
+        "3. 按照 802.1t 标准，100M 开销为 200,000，1G 为 20,000，10G 为 2,000。"
+    )
+    result = AnswerEvaluator.evaluate(q, answer, max_score=25.0)
+    assert result.passed
+    assert result.score == 100.0
+    assert result.earned_score == 25.0
+
+
+def test_triangle_topo_calc_scoring(question_bank):
+    q = question_bank.get("TOPO-CALC-TRIANGLE-01")
+    assert q is not None
+
+    answer = (
+        "1. SW1 是全网根桥（Root Bridge）；"
+        "2. SW2 的 G0/1 直连根桥当选 RP，G0/2 当选指定端口 DP；"
+        "3. SW3 的 G0/1 直连根桥当选 RP，G0/2 被阻塞沦为 Alternate 端口 AP；"
+        "4. 链路 C 两端 RPC 相同，比较 Sender BID 时 SW2 较小胜出作为 DP。"
+    )
+    result = AnswerEvaluator.evaluate(q, answer)
+    assert result.passed
+    assert result.score == 100.0
+
+
+def test_alt_bp_port_roles_scoring(question_bank):
+    q = question_bank.get("PORT-ROLE-ALT-BP-01")
+    assert q is not None
+
+    answer = (
+        "Alternate 是根端口 RP 的备份，Backup 是指定端口 DP 的备份。"
+        "Alternate 是因为收到对端其他交换机的更优 BPDU 而被阻塞；"
+        "Backup 是因为收到本交换机自身的 BPDU 而被阻塞，常见于连接集线器 Hub 或自环场景。"
+    )
+    result = AnswerEvaluator.evaluate(q, answer)
+    assert result.passed
+    assert result.score == 100.0
+
+
 def test_question_without_key_points():
     q = Question(
         id="CUSTOM-01",

@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
-from stp_quiz.models import UserRecord, WrongRecord
+from stp_quiz.models import PaperScoreReport, UserRecord, WrongRecord
 
 
 DEFAULT_DB_PATH = Path.home() / ".stp_quiz" / "stp_quiz.db"
@@ -59,6 +59,7 @@ class Storage:
                     user_answer TEXT NOT NULL,
                     score REAL NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
+                    knowledge_tag TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
                     resolved_at TEXT,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
@@ -77,11 +78,41 @@ class Storage:
                     score REAL NOT NULL,
                     passed INTEGER NOT NULL,
                     is_retest INTEGER NOT NULL DEFAULT 0,
+                    details TEXT DEFAULT '',
                     created_at TEXT NOT NULL
                 );
                 """
             )
+            # Full Exam Papers table
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS exam_papers (
+                    paper_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    nickname TEXT NOT NULL,
+                    total_score REAL NOT NULL,
+                    max_score REAL NOT NULL,
+                    passed INTEGER NOT NULL,
+                    details TEXT NOT NULL,
+                    weak_tags TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                );
+                """
+            )
             conn.commit()
+
+            # Ensure columns exist if table was created in an earlier schema
+            self._ensure_column(cursor, "wrong_records", "knowledge_tag", "TEXT DEFAULT ''")
+            self._ensure_column(cursor, "quiz_history", "details", "TEXT DEFAULT ''")
+            conn.commit()
+
+    @staticmethod
+    def _ensure_column(cursor: sqlite3.Cursor, table: str, column: str, col_type: str) -> None:
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in cursor.fetchall()]
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
     def get_or_create_user(self, user_id: str, nickname: Optional[str] = None) -> UserRecord:
         user_id = str(user_id).strip()
@@ -131,9 +162,12 @@ class Storage:
         passed: bool,
         is_retest: bool = False,
         nickname: Optional[str] = None,
+        knowledge_tag: str = "",
+        details: Optional[Dict[str, Any]] = None,
     ) -> Tuple[UserRecord, Optional[WrongRecord]]:
         now = datetime.now().isoformat()
         user = self.get_or_create_user(user_id, nickname)
+        details_str = json.dumps(details, ensure_ascii=False) if details else ""
 
         with self._get_conn() as conn:
             cursor = conn.cursor()
@@ -141,10 +175,10 @@ class Storage:
             # Record in history
             cursor.execute(
                 """
-                INSERT INTO quiz_history (user_id, question_id, question_title, user_answer, score, passed, is_retest, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO quiz_history (user_id, question_id, question_title, user_answer, score, passed, is_retest, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, question_id, question_title, user_answer, score, 1 if passed else 0, 1 if is_retest else 0, now),
+                (user_id, question_id, question_title, user_answer, score, 1 if passed else 0, 1 if is_retest else 0, details_str, now),
             )
 
             # Update user stats
@@ -166,10 +200,10 @@ class Storage:
                 # Add to wrong records
                 cursor.execute(
                     """
-                    INSERT INTO wrong_records (user_id, question_id, question_title, user_answer, score, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                    INSERT INTO wrong_records (user_id, question_id, question_title, user_answer, score, status, knowledge_tag, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
                     """,
-                    (user_id, question_id, question_title, user_answer, score, now),
+                    (user_id, question_id, question_title, user_answer, score, knowledge_tag, now),
                 )
                 rec_id = cursor.lastrowid
                 wrong_rec = WrongRecord(
@@ -180,6 +214,7 @@ class Storage:
                     user_answer=user_answer,
                     score=score,
                     status="pending",
+                    knowledge_tag=knowledge_tag,
                     created_at=now,
                 )
 
@@ -187,6 +222,89 @@ class Storage:
 
         updated_user = self.get_or_create_user(user_id, nickname)
         return updated_user, wrong_rec
+
+    def record_paper_result(self, report: PaperScoreReport) -> None:
+        """Persist a full paper score report."""
+        user = self.get_or_create_user(report.user_id, report.nickname)
+        details_str = json.dumps(report.item_results, ensure_ascii=False)
+        weak_tags_str = json.dumps(report.weak_tags, ensure_ascii=False)
+
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO exam_papers (paper_id, user_id, nickname, total_score, max_score, passed, details, weak_tags, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report.paper_id,
+                    report.user_id,
+                    report.nickname,
+                    report.total_score,
+                    report.max_score,
+                    1 if report.passed else 0,
+                    details_str,
+                    weak_tags_str,
+                    report.created_at,
+                ),
+            )
+            conn.commit()
+
+    def get_user_papers(self, user_id: str) -> List[Dict[str, Any]]:
+        """Retrieve historical paper score records for a user."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM exam_papers WHERE user_id = ? ORDER BY created_at DESC",
+                (str(user_id).strip(),),
+            )
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                results.append(
+                    {
+                        "paper_id": r["paper_id"],
+                        "user_id": r["user_id"],
+                        "nickname": r["nickname"],
+                        "total_score": r["total_score"],
+                        "max_score": r["max_score"],
+                        "passed": bool(r["passed"]),
+                        "details": json.loads(r["details"]) if r["details"] else [],
+                        "weak_tags": json.loads(r["weak_tags"]) if r["weak_tags"] else [],
+                        "created_at": r["created_at"],
+                    }
+                )
+            return results
+
+    def get_user_weak_tags(self, user_id: str) -> List[str]:
+        """Collect all untamed weak tags from pending wrong records for user."""
+        wrongs = self.get_pending_wrong_records(user_id)
+        tags = []
+        for w in wrongs:
+            if w.knowledge_tag and w.knowledge_tag not in tags:
+                tags.append(w.knowledge_tag)
+        return tags
+
+    def get_user_audit(self, user_id: str) -> Dict[str, Any]:
+        """Get full audit summary of a user: profile, stats, pending wrongs, weak tags, paper count."""
+        user = self.get_or_create_user(user_id)
+        pending_wrongs = self.get_pending_wrong_records(user_id)
+        weak_tags = self.get_user_weak_tags(user_id)
+        papers = self.get_user_papers(user_id)
+
+        return {
+            "user_id": user.user_id,
+            "nickname": user.nickname,
+            "total_score": user.total_score,
+            "total_quizzes": user.total_quizzes,
+            "passed_quizzes": user.passed_quizzes,
+            "pass_rate": user.pass_rate,
+            "pending_wrong_count": len(pending_wrongs),
+            "pending_wrongs": pending_wrongs,
+            "weak_tags": weak_tags,
+            "papers_count": len(papers),
+            "latest_papers": papers[:3],
+        }
 
     def get_pending_wrong_records(self, user_id: Optional[str] = None) -> List[WrongRecord]:
         query = "SELECT * FROM wrong_records WHERE status = 'pending'"
@@ -210,6 +328,7 @@ class Storage:
                     user_answer=row["user_answer"],
                     score=row["score"],
                     status=row["status"],
+                    knowledge_tag=row["knowledge_tag"] if "knowledge_tag" in row.keys() else "",
                     created_at=row["created_at"],
                     resolved_at=row["resolved_at"],
                 )
@@ -271,10 +390,14 @@ class Storage:
             cursor.execute("SELECT * FROM quiz_history")
             history = [dict(row) for row in cursor.fetchall()]
 
+            cursor.execute("SELECT * FROM exam_papers")
+            papers = [dict(row) for row in cursor.fetchall()]
+
         data = {
             "users": users,
             "wrong_records": wrong_records,
             "quiz_history": history,
+            "exam_papers": papers,
             "exported_at": datetime.now().isoformat(),
         }
 
@@ -300,19 +423,33 @@ class Storage:
             for w in data.get("wrong_records", []):
                 cursor.execute(
                     """
-                    INSERT OR REPLACE INTO wrong_records (id, user_id, question_id, question_title, user_answer, score, status, created_at, resolved_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO wrong_records (id, user_id, question_id, question_title, user_answer, score, status, knowledge_tag, created_at, resolved_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (w["id"], w["user_id"], w["question_id"], w["question_title"], w["user_answer"], w["score"], w["status"], w["created_at"], w.get("resolved_at")),
+                    (w["id"], w["user_id"], w["question_id"], w["question_title"], w["user_answer"], w["score"], w["status"], w.get("knowledge_tag", ""), w["created_at"], w.get("resolved_at")),
                 )
 
             for h in data.get("quiz_history", []):
                 cursor.execute(
                     """
-                    INSERT OR REPLACE INTO quiz_history (id, user_id, question_id, question_title, user_answer, score, passed, is_retest, created_at)
+                    INSERT OR REPLACE INTO quiz_history (id, user_id, question_id, question_title, user_answer, score, passed, is_retest, details, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (h["id"], h["user_id"], h["question_id"], h["question_title"], h["user_answer"], h["score"], h["passed"], h.get("is_retest", 0), h.get("details", ""), h["created_at"]),
+                )
+
+            for p in data.get("exam_papers", []):
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO exam_papers (paper_id, user_id, nickname, total_score, max_score, passed, details, weak_tags, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (h["id"], h["user_id"], h["question_id"], h["question_title"], h["user_answer"], h["score"], h["passed"], h.get("is_retest", 0), h["created_at"]),
+                    (p["paper_id"], p["user_id"], p["nickname"], p["total_score"], p["max_score"], p["passed"], p["details"], p["weak_tags"], p["created_at"]),
                 )
 
             conn.commit()
+
+
+# Tracker alias
+QuizTracker = Storage
+Tracker = Storage

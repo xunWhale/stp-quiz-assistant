@@ -405,6 +405,341 @@ DEFAULT_QUESTIONS: List[Dict] = [
         "difficulty": 4,
         "tags": ["拓扑分析", "RP选举", "Sender PID", "易错题"],
     },
+    {
+        "id": "STP-TIMER-01",
+        "category": "forward_delay_timers",
+        "qtype": "essay",
+        "title": "STP Forward Delay 计时器机制与拓扑变更收敛过程",
+        "content": (
+            "请深入阐述 STP 中的 Forward Delay（转发延迟计时器，默认15秒）的设计机理：\n"
+            "1. 为什么端口从 Blocking 进入 Forwarding 必须经历 Listening 和 Learning 两个状态，且各需等待一个 Forward Delay？\n"
+            "2. 当网络发生拓扑变更产生 TC BPDU 后，交换机对 MAC 地址表老化时间（Aging Time）执行了怎样的缩短调整？其根本目的何在？"
+        ),
+        "standard_answer": (
+            "1. Forward Delay 经历 Listening 与 Learning 各 15 秒（共 30 秒）的原因：\n"
+            "   - Listening 状态（15s）：等待全网各交换机完成 BPDU 的泛洪和生成树拓扑稳定计算，防止新根端口/指定端口在其他交换机尚未阻塞前提前转发导致临时环路；\n"
+            "   - Learning 状态（15s）：端口开始接收数据帧并学习源 MAC 地址构建转发表，但不转发用户流量，防止端口直接转发时因转发表为空而引发全网未知单播帧的泛洪广播风暴。\n"
+            "2. TC BPDU 对 MAC 地址老化时间的影响：\n"
+            "   - 默认情况下 MAC 地址表老化时间为 300 秒（5分钟）；\n"
+            "   - 拓扑改变时，收到 TC BPDU 的交换机会将 MAC 地址表老化时间立即缩短为一个 Forward Delay 时间（通常为 15 秒）；\n"
+            "   - 目的：快速淘汰拓扑变更前由于路径改变而失效的旧 MAC 地址条目，促使主机流量迅速刷新重定向到新路径，避免长达 5 分钟的黑洞或次优转发。"
+        ),
+        "key_points": [
+            {
+                "point_id": "listening_role",
+                "description": "阐述 Listening 状态等待 15s 确保 BPDU 泛洪稳定以杜绝临时环路",
+                "synonym_groups": [
+                    ["listening", "侦听", "监听"],
+                    ["bpdu", "拓扑稳定", "重新计算", "泛洪"],
+                    ["防环", "环路", "临时环路", "避免环路"]
+                ],
+                "weight": 1.0,
+                "required": True,
+            },
+            {
+                "point_id": "learning_role",
+                "description": "阐述 Learning 状态等待 15s 学习 MAC 地址表以避免未知单播泛洪",
+                "synonym_groups": [
+                    ["learning", "学习"],
+                    ["mac", "mac地址", "转发表"],
+                    ["泛洪", "广播", "未知单播", "风暴"]
+                ],
+                "weight": 1.0,
+                "required": True,
+            },
+            {
+                "point_id": "tc_mac_aging_shorten",
+                "description": "阐明 TC 发生后 MAC 地址表老化时间从 300 秒缩短为 15 秒（Forward Delay）",
+                "synonym_groups": [
+                    ["300", "5分钟", "默认老化"],
+                    ["15", "forward delay", "缩短", "快速老化"],
+                    ["mac", "老化时间", "aging", "老化"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "tc_purpose",
+                "description": "解释缩短老化时间是为了刷新旧条目避免黑洞与转发错误",
+                "synonym_groups": [
+                    ["黑洞", "失效", "旧条目", "刷新", "重定向", "新路径", "错误转发"]
+                ],
+                "weight": 1.0,
+                "required": False,
+            },
+        ],
+        "explanation": "Forward Delay 默认 15s，两次等待（15s+15s=30s）分别防环和防泛洪；收到 TC BPDU 后的 15s 快速老化则是消除无效 MAC 路由黑洞的经典利器。",
+        "difficulty": 3,
+        "tags": ["Forward Delay", "计时器", "Listening", "Learning", "TC BPDU", "MAC老化"],
+    },
+    {
+        "id": "PORT-ROLE-ALT-BP-01",
+        "category": "port_roles_states",
+        "qtype": "essay",
+        "title": "RSTP Alternate 端口与 Backup 端口角色深入辨析",
+        "content": (
+            "请详细对比 RSTP / MSTP 中的 Alternate 端口（预备端口）与 Backup 端口（备份端口）的核心区别：\n"
+            "1. 它们各自是谁的备份？在什么故障发生时接替转发？\n"
+            "2. 从收到 BPDU 的来源判定角度，两者的判定规则有何根本不同？在什么拓扑连接下才会出现 Backup 端口？"
+        ),
+        "standard_answer": (
+            "1. 备份目标与接替场景：\n"
+            "   - Alternate 端口：是根端口（Root Port, RP）的备份。当当前根端口发生链路故障中断时，最优的 Alternate 端口可极速无缝切换为新的根端口并进入 Forwarding；\n"
+            "   - Backup 端口：是指定端口（Designated Port, DP）的备份。当当前指定端口发生故障时，Backup 端口作为同一网段上的冗余接口接替指定端口转发。\n"
+            "2. 收到 BPDU 来源与判定依据：\n"
+            "   - Alternate 端口：收到的是【对端其他交换机】发送的更优 BPDU 而被阻塞；\n"
+            "   - Backup 端口：收到的是【本交换机自身其他端口】发送的更优 BPDU 而被阻塞；\n"
+            "3. 拓扑场景：Backup 端口只有在同一个交换机的两个及以上端口连接到同一个共享介质（如通过 Hub 集线器连入同一冲突域）或交换机端口自环（loopback）时才会出现。"
+        ),
+        "key_points": [
+            {
+                "point_id": "backup_target_diff",
+                "description": "说明 Alternate 是根端口(RP)备份，Backup 是指定端口(DP)备份",
+                "synonym_groups": [
+                    ["alternate", "预备端口", "ap"],
+                    ["根端口", "rp", "root port"],
+                    ["backup", "备份端口", "bp"],
+                    ["指定端口", "dp", "designated port"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "bpdu_source_diff",
+                "description": "判定依据：Alternate 收到其他设备的 BPDU 被阻塞；Backup 收到自身设备的 BPDU 被阻塞",
+                "synonym_groups": [
+                    ["其他交换机", "对端", "别的设备", "外部"],
+                    ["自身", "自己", "本地", "本交换机", "同设备"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "hub_shared_scene",
+                "description": "指出 Backup 端口出现的典型场景是连接共享介质集线器（Hub）或环路/自环",
+                "synonym_groups": [
+                    ["hub", "集线器", "共享", "共享介质", "自环", "同一冲突域", "同一网段"]
+                ],
+                "weight": 1.0,
+                "required": False,
+            },
+        ],
+        "explanation": "口诀：Alternate 备 RP，收他端 BPDU；Backup 备 DP，收自端 BPDU（常见于直连 Hub 共享总线）。",
+        "difficulty": 3,
+        "tags": ["端口角色", "Alternate", "Backup", "RSTP", "Hub"],
+    },
+    {
+        "id": "CALC-BID-PID-01",
+        "category": "stp_election",
+        "qtype": "topo_calc",
+        "title": "桥优先级/系统扩展ID合成 BID 与 802.1t 链路开销计算",
+        "content": (
+            "拓扑计算判断：\n"
+            "现有交换机 SW-Core，配置桥优先级 Bridge Priority 为 4096，所属 VLAN 为 VLAN 10。\n"
+            "其物理接口 GigabitEthernet 0/0/5 的端口优先级被配置为 64。\n"
+            "请完成以下计算与判定：\n"
+            "1. 在启用 Extended System ID（系统扩展ID）的情况下，该交换机在 VLAN 10 中的实际数值 BID 优先级部分是多少？（以十进制写出）\n"
+            "2. 该接口 G0/0/5 的实际 Port ID（PID）在 BPDU 中由哪两部分组成？其十进制优先级部分是多少？\n"
+            "3. 按照 IEEE 802.1t 推荐标准，100M（快速以太网）、1Gbps（千兆以太网）、10Gbps（万兆以太网）的默认路径开销（Path Cost）分别是多少？"
+        ),
+        "standard_answer": (
+            "1. 实际 BID 优先级部分：4096 + 10 = 4106（由高 4 位优先级 4096 加上低 12 位系统扩展 ID VLAN 10 组合而成）。\n"
+            "2. Port ID（PID）组成：由 1 字节（8 位）端口优先级和 1 字节（8 位）端口号（或高 4 位优先级 + 低 12 位接口号）组成；优先级部分为 64，端口号为 5，即 64.5。\n"
+            "3. IEEE 802.1t 默认路径开销（Path Cost）：\n"
+            "   - 100M（Fast Ethernet）：200,000；\n"
+            "   - 1Gbps（Gigabit Ethernet）：20,000；\n"
+            "   - 10Gbps（10-Gigabit Ethernet）：2,000。"
+        ),
+        "key_points": [
+            {
+                "point_id": "bid_calc_4106",
+                "description": "正确计算出实际 BID 优先级为 4106 (4096 + 10)",
+                "synonym_groups": [
+                    ["4106", "4096+10", "4096 + 10"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "pid_composition",
+                "description": "指明 PID 由端口优先级（64）和端口号（5）组成（64.5）",
+                "synonym_groups": [
+                    ["64", "优先级"],
+                    ["端口号", "接口号", "5", "64.5", "128"]
+                ],
+                "weight": 1.0,
+                "required": True,
+            },
+            {
+                "point_id": "cost_8021t",
+                "description": "正确写出 802.1t 标准开销：100M为200000、1G为20000、10G为2000",
+                "synonym_groups": [
+                    ["200000", "200,000", "20万"],
+                    ["20000", "20,000", "2万"],
+                    ["2000", "2,000"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+        ],
+        "explanation": "802.1t 扩展开销中 10G=2000, 1G=20000, 100M=200000；BID = Priority(高4位) + System ID Extension(低12位) + MAC。",
+        "difficulty": 3,
+        "tags": ["BID计算", "PID计算", "802.1t", "路径开销", "Path Cost"],
+    },
+    {
+        "id": "TOPO-CALC-TRIANGLE-01",
+        "category": "comprehensive",
+        "qtype": "topo_calc",
+        "title": "三交换机三角形环网生成树角色综合判定",
+        "content": (
+            "拓扑计算与判断：\n"
+            "三台交换机 SW1、SW2、SW3 构成一个三角形环状网络：\n"
+            "- SW1: 桥ID = 4096.1111.1111.1111\n"
+            "- SW2: 桥ID = 32768.2222.2222.2222\n"
+            "- SW3: 桥ID = 32768.3333.3333.3333\n"
+            "链路情况：\n"
+            "- 链路A (SW1 的 G0/1 <---> SW2 的 G0/1)，开销 Cost = 20000\n"
+            "- 链路B (SW1 的 G0/2 <---> SW3 的 G0/1)，开销 Cost = 20000\n"
+            "- 链路C (SW2 的 G0/2 <---> SW3 的 G0/2)，开销 Cost = 20000\n"
+            "请完成计算并逐一写出：\n"
+            "1. 哪台交换机当选全网根桥（Root Bridge）？\n"
+            "2. SW2 的 G0/1 和 G0/2 分别是什么端口角色？\n"
+            "3. SW3 的 G0/1 和 G0/2 分别是什么端口角色？\n"
+            "4. 链路 C 上的指定端口（DP）由哪台交换机的哪个接口担任？哪端接口被阻塞（成为 Alternate 端口）？"
+        ),
+        "standard_answer": (
+            "1. 根桥：SW1 当选根桥，因为其 BID 优先级 4096 为全网最小；根桥上的所有激活端口（SW1 的 G0/1、G0/2）均为指定端口（DP）。\n"
+            "2. SW2 端口角色：\n"
+            "   - G0/1：直连根桥 SW1，RPC=20000，当选为根端口（RP）；\n"
+            "   - G0/2：面向链路 C，RPC 到根桥为 20000，当选为指定端口（DP）。\n"
+            "3. SW3 端口角色：\n"
+            "   - G0/1：直连根桥 SW1，RPC=20000，当选为根端口（RP）；\n"
+            "   - G0/2：面向链路 C，当选为阻塞端口（Alternate Port, AP）。\n"
+            "4. 链路 C 端口决胜：\n"
+            "   - SW2 和 SW3 到达根桥的 RPC 均为 20000 打平；\n"
+            "   - 进一步比较两端的发送者桥ID（Sender BID）：SW2 的 MAC（2222.2222.2222）小于 SW3 的 MAC（3333.3333.3333），故 SW2 的 G0/2 胜出成为链路 C 的指定端口（DP）；\n"
+            "   - SW3 的 G0/2 端口沦为 Alternate Port（阻塞端口），阻断环路。"
+        ),
+        "key_points": [
+            {
+                "point_id": "root_sw1",
+                "description": "正确判定 SW1 为根桥（Root Bridge）",
+                "synonym_groups": [
+                    ["sw1", "交换机1"],
+                    ["根桥", "root", "root bridge"]
+                ],
+                "weight": 1.0,
+                "required": True,
+            },
+            {
+                "point_id": "sw2_roles",
+                "description": "正确判定 SW2 的 G0/1 为根端口（RP），G0/2 为指定端口（DP）",
+                "synonym_groups": [
+                    ["sw2", "交换机2"],
+                    ["g0/1", "0/1", "rp", "根端口"],
+                    ["g0/2", "0/2", "dp", "指定端口"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "sw3_roles_ap",
+                "description": "正确判定 SW3 的 G0/1 为根端口（RP），G0/2 为 Alternate/阻塞端口（AP）",
+                "synonym_groups": [
+                    ["sw3", "交换机3"],
+                    ["g0/1", "0/1", "rp", "根端口"],
+                    ["g0/2", "0/2", "ap", "alternate", "阻塞", "block", "预备"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "link_c_bid_compare",
+                "description": "说明链路 C 比较 Sender BID 时 SW2 较小胜出作为 DP",
+                "synonym_groups": [
+                    ["链路c", "sw2", "mac", "bid", "更小", "小于", "胜出", "sender bid"]
+                ],
+                "weight": 1.0,
+                "required": False,
+            },
+        ],
+        "explanation": "经典三角环路：SW1 是根，SW2/SW3 直连链路端口为 RP；底边链路 C 两端 RPC 相同，比 BID 时 SW2(MAC .2222) 优于 SW3(MAC .3333)，故 SW2-G0/2 为 DP，SW3-G0/2 为 AP 阻塞。",
+        "difficulty": 4,
+        "tags": ["拓扑计算", "三角环网", "RP判定", "DP判定", "Alternate端口"],
+    },
+    {
+        "id": "ANALYSIS-FILL-PA-01",
+        "category": "rstp_convergence_pa",
+        "qtype": "analysis_fill",
+        "title": "RSTP Proposal/Agreement (P/A) 握手收敛流程分析补全",
+        "content": (
+            "分析补全题：\n"
+            "请根据 RSTP Proposal/Agreement (P/A) 快速收敛握手机制的规范流程，补全以下步骤中的关键机制名词：\n"
+            "步骤 1：P/A 握手能够启用的首要物理前提是，链路必须处于 (1)_____ 链路类型且工作在 (2)_____ 双工模式。\n"
+            "步骤 2：新链路连接后，指定端口 DP 处于 Discarding 状态，向对端发送置位 (3)_____ 标志的 RST BPDU 提议进入转发。\n"
+            "步骤 3：下游交换机收到提议后，为防止出现临时数据环路，必须立即执行 (4)_____ 操作，将本设备除 (5)_____ 外的所有其他非根指定端口全部置为 Discarding 阻塞状态。\n"
+            "步骤 4：下游各端口完成阻塞确认后，根端口 RP 立即向对端回复置位 (6)_____ 标志的 BPDU，发起方 DP 收到后无需等待 30 秒转发延迟计时器直接进入 Forwarding 状态。"
+        ),
+        "standard_answer": (
+            "(1) 点对点 (Point-to-Point / P2P)\n"
+            "(2) 全双工 (Full-Duplex)\n"
+            "(3) Proposal (提案/提议)\n"
+            "(4) Sync (同步)\n"
+            "(5) 边缘端口 (Edge Port)\n"
+            "(6) Agreement (同意/确认)"
+        ),
+        "fill_blanks": {
+            "1": ["点对点", "point-to-point", "p2p", "point to point"],
+            "2": ["全双工", "full-duplex", "fullduplex", "full duplex"],
+            "3": ["proposal", "提案", "提议", "p位"],
+            "4": ["sync", "同步", "同步操作"],
+            "5": ["边缘端口", "edge port", "edgeport", "边缘口"],
+            "6": ["agreement", "同意", "确认", "a位"]
+        },
+        "key_points": [
+            {
+                "point_id": "blank_1_2",
+                "description": "(1) 点对点 (Point-to-Point) 与 (2) 全双工 (Full-Duplex)",
+                "synonym_groups": [
+                    ["点对点", "point-to-point", "p2p"],
+                    ["全双工", "full-duplex", "fullduplex"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "blank_3",
+                "description": "(3) Proposal 标志",
+                "synonym_groups": [
+                    ["proposal", "提案", "提议", "p位"]
+                ],
+                "weight": 1.0,
+                "required": True,
+            },
+            {
+                "point_id": "blank_4_5",
+                "description": "(4) Sync 同步操作，阻塞除 (5) 边缘端口 (Edge Port) 外的非根指定端口",
+                "synonym_groups": [
+                    ["sync", "同步"],
+                    ["边缘端口", "edge port", "edgeport"]
+                ],
+                "weight": 1.5,
+                "required": True,
+            },
+            {
+                "point_id": "blank_6",
+                "description": "(6) Agreement 同意标志",
+                "synonym_groups": [
+                    ["agreement", "同意", "确认", "a位"]
+                ],
+                "weight": 1.0,
+                "required": True,
+            },
+        ],
+        "explanation": "P/A 握手四步走：点对点全双工前提 -> DP 发 Proposal -> 下游 Sync 阻塞非边缘端口防环 -> RP 回 Agreement -> DP 极速切 Forwarding。",
+        "difficulty": 3,
+        "tags": ["分析补全", "RSTP", "PA机制", "Proposal", "Sync", "Agreement", "Edge Port"],
+    },
 ]
 
 

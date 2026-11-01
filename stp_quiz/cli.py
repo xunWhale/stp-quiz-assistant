@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 import sys
 from typing import Optional
 
-from stp_quiz.models import Category, QuestionType
+from stp_quiz.models import Category, QuestionType, QuizPaper
 from stp_quiz.question_bank import QuestionBank
 from stp_quiz.service import QuizService
 from stp_quiz.storage import Storage
@@ -93,7 +95,31 @@ def create_parser() -> argparse.ArgumentParser:
     import_parser = subparsers.add_parser("import-data", parents=[common_parser], help="从 JSON 导入用户积分与错题本")
     import_parser.add_argument("file", type=str, help="源 JSON 文件路径")
 
-    # 9. 沉浸式交互控制台 (interactive)
+    # 9. 抽查卷生成 (paper)
+    paper_parser = subparsers.add_parser("paper", parents=[common_parser], help="生成 100 分抽查试卷（支持针对弱项出题）")
+    paper_parser.add_argument("--user", type=str, default="月月鸟", help="抽查目标群友昵称/ID (默认: 月月鸟)")
+    paper_parser.add_argument("--weak-first", action="store_true", help="优先针对该群友未掌握的弱项知识点出题")
+    paper_parser.add_argument("--score", type=float, default=100.0, help="试卷总分 (默认: 100.0)")
+    paper_parser.add_argument("--out", type=str, default=None, help="可选：将试卷导出为 JSON 文件")
+
+    # 10. 批改交卷 (grade-paper)
+    grade_parser = subparsers.add_parser("grade-paper", parents=[common_parser], help="整卷作答与智能批改，生成详细成绩单")
+    grade_parser.add_argument("--user", type=str, required=True, help="答题群友昵称/ID")
+    grade_parser.add_argument("--paper-file", type=str, default=None, help="试卷 JSON 文件路径 (不提供则当场生成)")
+    grade_parser.add_argument("--answers", type=str, default=None, help="答案 JSON 字典字符串（如 '{\"STP-ELEC-02\": \"B\"}'）")
+    grade_parser.add_argument("--interactive", action="store_true", help="进入终端交互式逐题答卷模式")
+
+    # 11. 查账 (audit - 查询群友欠考、未掌握知识点画像)
+    audit_parser = subparsers.add_parser("audit", parents=[common_parser], help="查询群友（如月月鸟）的抽查档案与欠考账本")
+    audit_parser.add_argument("user", type=str, help="群友昵称/ID (如: 月月鸟)")
+
+    # 12. 专属补考卷生成与执行 (retest-paper)
+    retest_p_parser = subparsers.add_parser("retest-paper", parents=[common_parser], help="针对某群友所有欠考错题生成专属补考卷")
+    retest_p_parser.add_argument("user", type=str, help="需补考群友昵称/ID (如: 月月鸟)")
+    retest_p_parser.add_argument("--out", type=str, default=None, help="可选：将补考卷导出为 JSON 文件")
+    retest_p_parser.add_argument("--interactive", action="store_true", help="直接在终端启动该补考卷的逐题订正消错")
+
+    # 13. 沉浸式交互控制台 (interactive)
     subparsers.add_parser("interactive", parents=[common_parser], help="进入全交互式 STP 抽查小助手控制台")
 
     return parser
@@ -167,27 +193,57 @@ def run_retest_interactive(service: QuizService, user: str):
         print("\n" + service.format_eval_report(q, eval_res, urec, is_retest=True))
 
 
+def run_grade_paper_interactive(service: QuizService, paper: QuizPaper, user: str) -> None:
+    print("\n" + "=" * 68)
+    print(f"🚀 开始答题模式: 【{paper.title}】 (共 {len(paper.items)} 题，满分 {paper.total_points}分)")
+    print("=" * 68)
+
+    answers: dict[str, str] = {}
+    for idx, item in enumerate(paper.items, start=1):
+        q = item.question
+        print(f"\n--- [第 {idx}/{len(paper.items)} 题 (分值: {item.points}分)] ---")
+        print(service.format_quiz_card(q, target_user=user))
+        print("👉 请输入作答内容（直接回车提交本题，输入 'skip' 留空跳过）:")
+        try:
+            ans = input("> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n🚫 已中断交卷。")
+            return
+
+        if ans.lower() == "skip":
+            answers[q.id] = ""
+        else:
+            answers[q.id] = ans
+
+    print("\n⏳ 正在进行全卷智能评分与错误诊断...")
+    report = service.grade_paper(paper=paper, answers=answers, user_id=user)
+    print("\n" + service.format_paper_report(report))
+
+
 def run_interactive_menu(service: QuizService):
     print("=" * 65)
     print("  🏀 欢迎来到 ikun 群 STP 抽查小助手交互控制台 🏀")
     print("  作者: xunWhale | 专注于 STP/RSTP/MSTP 机制高阶内卷与抽查")
     print("=" * 65)
 
-    current_user = "ikun-007"
+    current_user = "月月鸟"
 
     while True:
         print(f"\n当前操作群友: [{current_user}]")
         print("1. 🎲 随机抽取题目自测")
         print("2. 🔍 突击抽查指定群友")
-        print("3. 📝 进行错题补考（清空错题本）")
-        print("4. 📕 查看我的待补考错题")
-        print("5. 🏆 查看群友积分战力排行榜")
-        print("6. 📚 浏览题库所有考点目录")
-        print("7. 👤 切换当前操作群友")
+        print("3. 📑 生成 100 分综合抽查试卷 (支持针对弱项出题)")
+        print("4. 📝 启动 100 分试卷交互答题并当场批改")
+        print("5. 🧐 查账某群友欠考账本与未掌握知识点画像")
+        print("6. 🎯 生成某群友的专属错题补考卷")
+        print("7. 📕 查看我的待补考错题清单")
+        print("8. 🏆 查看群友积分战力排行榜")
+        print("9. 📚 浏览题库所有考点目录")
+        print("10. 👤 切换当前操作群友")
         print("0. 🚪 退出系统")
 
         try:
-            choice = input("\n请选择功能序号 [0-7]: ").strip()
+            choice = input("\n请选择功能序号 [0-10]: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\n👋 拜拜咯~")
             break
@@ -210,16 +266,35 @@ def run_interactive_menu(service: QuizService):
             if target:
                 run_inspect_interactive(service, target)
         elif choice == "3":
-            run_retest_interactive(service, current_user)
+            paper = service.generate_paper(user_id=current_user, weak_first=True)
+            print("\n" + service.format_paper(paper))
         elif choice == "4":
+            paper = service.generate_paper(user_id=current_user, weak_first=True)
+            run_grade_paper_interactive(service, paper, current_user)
+        elif choice == "5":
+            target = input(f"请输入要查账的群友昵称/ID (默认: {current_user}): ").strip() or current_user
+            audit = service.audit_user(target)
+            print("\n" + service.format_user_audit(audit))
+        elif choice == "6":
+            target = input(f"请输入群友昵称/ID (默认: {current_user}): ").strip() or current_user
+            retest_p = service.generate_retest_paper(target)
+            if not retest_p:
+                print(f"✨ 太棒了！群友 [{target}] 没有未消错题，暂无欠考！")
+            else:
+                print("\n" + service.format_paper(retest_p))
+                run_choice = input("是否立即开始交互式补考答题？[y/N]: ").strip().lower()
+                if run_choice == "y":
+                    run_grade_paper_interactive(service, retest_p, target)
+        elif choice == "7":
             wrongs = service.get_user_pending_wrongs(current_user)
             if not wrongs:
                 print(f"✨ 恭喜，[{current_user}] 没有未消错题！")
             else:
                 print(f"\n📕 群友 [{current_user}] 待补考列表 ({len(wrongs)} 题):")
                 for w in wrongs:
-                    print(f"   • [{w.question_id}] {w.question_title} (历史得分: {w.score})")
-        elif choice == "5":
+                    tag_str = f" [{w.knowledge_tag}]" if w.knowledge_tag else ""
+                    print(f"   • [{w.question_id}] {w.question_title} (历史得分: {w.score}){tag_str}")
+        elif choice == "8":
             leaders = service.get_leaderboard()
             print("\n🏆 ===== ikun 群生成树积分风云榜 ===== 🏆")
             print(f"{'排名':<6}{'群友ID/昵称':<18}{'总积分':<10}{'刷题数':<8}{'通过率'}")
@@ -227,12 +302,12 @@ def run_interactive_menu(service: QuizService):
             for rank, u in enumerate(leaders, start=1):
                 print(f"{rank:<6}{u.nickname:<18}{u.total_score:<10.1f}{u.total_quizzes:<8}{u.pass_rate}%")
             print("-" * 55)
-        elif choice == "6":
+        elif choice == "9":
             questions = service.qb.list_all()
             print(f"\n📚 题库现有 {len(questions)} 道考题:")
             for q in questions:
                 print(f"   [{q.id}] ({q.category.value} | {q.qtype.value}) {q.title}")
-        elif choice == "7":
+        elif choice == "10":
             new_u = input("请输入新的群友昵称/ID: ").strip()
             if new_u:
                 current_user = new_u
@@ -349,6 +424,65 @@ def main(argv=None):
         except Exception as e:
             print(f"❌ 导入失败: {e}", file=sys.stderr)
             sys.exit(1)
+
+    elif args.command == "paper":
+        paper = service.generate_paper(
+            user_id=args.user,
+            target_score=args.score,
+            weak_first=args.weak_first,
+        )
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as f:
+                json.dump(paper.to_dict(), f, ensure_ascii=False, indent=2)
+            print(f"✅ 成功将 100 分抽查试卷保存至: {args.out}")
+        print("\n" + service.format_paper(paper))
+
+    elif args.command == "grade-paper":
+        paper = None
+        if args.paper_file:
+            with open(args.paper_file, "r", encoding="utf-8") as f:
+                paper_data = json.load(f)
+            paper = QuizPaper.from_dict(paper_data)
+        else:
+            paper = service.generate_paper(user_id=args.user, weak_first=True)
+
+        if args.interactive:
+            run_grade_paper_interactive(service, paper, args.user)
+        else:
+            answers_dict = {}
+            if args.answers:
+                try:
+                    answers_dict = json.loads(args.answers)
+                except Exception:
+                    # Maybe file path
+                    if Path(args.answers).exists():
+                        with open(args.answers, "r", encoding="utf-8") as af:
+                            answers_dict = json.load(af)
+                    else:
+                        print(f"❌ 无法解析答案 JSON: {args.answers}", file=sys.stderr)
+                        sys.exit(1)
+            report = service.grade_paper(paper=paper, answers=answers_dict, user_id=args.user)
+            print("\n" + service.format_paper_report(report))
+
+    elif args.command == "audit":
+        audit_res = service.audit_user(args.user)
+        print("\n" + service.format_user_audit(audit_res))
+
+    elif args.command == "retest-paper":
+        retest_paper = service.generate_retest_paper(args.user)
+        if not retest_paper:
+            print(f"✨ 太棒了！群友 [{args.user}] 当前没有未补错题，错题本已全部清空！")
+            return
+
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as f:
+                json.dump(retest_paper.to_dict(), f, ensure_ascii=False, indent=2)
+            print(f"✅ 成功将错题补考卷导出至: {args.out}")
+
+        print("\n" + service.format_paper(retest_paper))
+
+        if args.interactive:
+            run_grade_paper_interactive(service, retest_paper, args.user)
 
 
 if __name__ == "__main__":
